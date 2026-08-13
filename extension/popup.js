@@ -28,9 +28,15 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   // 1. Start the capture FIRST (fire-and-forget): the service worker wakes up,
   //    calls the daemon /start and stores the active session id.
   notifyBackground('start_capture', tabId);
-  // 2. Open the panel with the fresh click gesture. It auto-attaches to the
-  //    active session from storage, so it does not depend on any message.
+  // 2. Open the panel with the fresh click gesture. Force-enable the tab first:
+  //    per-tab disabled overrides from a previous capture can persist, and
+  //    open() would fail with "No active side panel for tabId".
   if (chrome.sidePanel && tabId != null) {
+    try {
+      await chrome.sidePanel.setOptions({ tabId, enabled: true });
+    } catch {
+      // ignore — open() below will surface real problems
+    }
     chrome.sidePanel.open({ tabId }).catch((e) => show(`⚠ panel: ${e.message}`));
   }
 });
