@@ -4,72 +4,42 @@ function show(text) {
   statusEl.textContent = text;
 }
 
-async function send(action) {
-  // The popup knows its own window; pass the active tab id so the background
-  // restricts the side panel to the right tab (the service worker's
-  // "currentWindow" can resolve to a different window otherwise).
-  let tabId;
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    tabId = tab?.id;
-  } catch {
-    tabId = undefined;
-  }
-
-  const response = await chrome.runtime.sendMessage({ action, tabId });
-  if (!response) {
-    show('no response from the extension background');
-    return;
-  }
-
-  if (!response.ok) {
-    show(`⚠ ${response.error}`);
-    return;
-  }
-
-  if (action === 'start_capture') {
-    show(`● recording — ${response.sessionId}`);
-    // The side panel auto-attaches to the active session from storage, so this
-    // message is just a hint — it must not be the only way the panel connects
-    // (the popup can close the moment the panel opens).
-    chrome.runtime.sendMessage({
-      target: 'panel',
-      action: 'transcript_start',
-      sessionId: response.sessionId,
-    }).catch(() => {});
-  } else if (action === 'stop_capture') {
-    show('■ stopped — finishing transcription...');
-  }
+// Send a message to the background WITHOUT awaiting the response. The popup
+// closes the moment the side panel opens (focus loss), and any pending await
+// would be cancelled — but the message itself is already queued and the service
+// worker keeps processing it.
+function notifyBackground(action, tabId) {
+  const msg = { action };
+  if (tabId != null) msg.tabId = tabId;
+  chrome.runtime.sendMessage(msg).catch(() => {});
 }
 
-// Redundant safety net: stop the capture daemon directly from the popup, in
-// addition to the background service worker doing it. If the service worker was
-// asleep (MV3 kills idle workers), this still reaches the daemon.
-async function stopDaemonDirectly() {
+async function activeTabId() {
   try {
-    const resp = await fetch('http://127.0.0.1:8899/stop');
-    if (resp.ok) return await resp.json();
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab?.id;
   } catch {
-    // daemon not running — nothing to stop
+    return undefined;
   }
-  return null;
 }
 
 document.getElementById('startBtn').addEventListener('click', async () => {
-  // Open the side panel IMMEDIATELY on the current tab: sidePanel.open() needs a
-  // fresh user gesture, and waiting on the background round-trip (fetch to the
-  // daemon) can make Chrome drop it.
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (chrome.sidePanel && tab?.id != null) {
-      chrome.sidePanel.open({ tabId: tab.id }).catch((e) => show(`⚠ panel: ${e.message}`));
-    }
-  } catch (e) {
-    show(`⚠ panel: ${e.message}`);
+  const tabId = await activeTabId();
+  // 1. Start the capture FIRST (fire-and-forget): the service worker wakes up,
+  //    calls the daemon /start and stores the active session id.
+  notifyBackground('start_capture', tabId);
+  // 2. Open the panel with the fresh click gesture. It auto-attaches to the
+  //    active session from storage, so it does not depend on any message.
+  if (chrome.sidePanel && tabId != null) {
+    chrome.sidePanel.open({ tabId }).catch((e) => show(`⚠ panel: ${e.message}`));
   }
-  await send('start_capture');
 });
-document.getElementById('stopBtn').addEventListener('click', async () => {
-  await stopDaemonDirectly();
-  await send('stop_capture');
+
+document.getElementById('stopBtn').addEventListener('click', () => {
+  show('■ stopped — finishing transcription...');
+  // 1. Stop the daemon directly: the request reaches 127.0.0.1 even if the
+  //    popup dies right after (the daemon processes it server-side).
+  fetch('http://127.0.0.1:8899/stop').catch(() => {});
+  // 2. Clean up state in the background (clears storage, notifies the panel).
+  notifyBackground('stop_capture');
 });
