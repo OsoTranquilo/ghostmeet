@@ -34,9 +34,15 @@ async function send(action) {
       action: 'transcript_start',
       sessionId: response.sessionId,
     }).catch(() => {});
+    // Open the panel on the capture tab explicitly (windowId can fail when the
+    // panel is restricted per-tab). Surface errors instead of swallowing them.
     if (chrome.sidePanel) {
-      const window = await chrome.windows.getCurrent();
-      chrome.sidePanel.open({ windowId: window.id }).catch(() => {});
+      if (tabId != null) {
+        chrome.sidePanel.open({ tabId }).catch((e) => show(`⚠ panel: ${e.message}`));
+      } else {
+        const window = await chrome.windows.getCurrent();
+        chrome.sidePanel.open({ windowId: window.id }).catch((e) => show(`⚠ panel: ${e.message}`));
+      }
     }
   } else if (action === 'stop_capture') {
     show('■ stopped — finishing transcription...');
@@ -56,7 +62,20 @@ async function stopDaemonDirectly() {
   return null;
 }
 
-document.getElementById('startBtn').addEventListener('click', () => send('start_capture'));
+document.getElementById('startBtn').addEventListener('click', async () => {
+  // Open the side panel IMMEDIATELY on the current tab: sidePanel.open() needs a
+  // fresh user gesture, and waiting on the background round-trip (fetch to the
+  // daemon) can make Chrome drop it.
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (chrome.sidePanel && tab?.id != null) {
+      chrome.sidePanel.open({ tabId: tab.id }).catch((e) => show(`⚠ panel: ${e.message}`));
+    }
+  } catch (e) {
+    show(`⚠ panel: ${e.message}`);
+  }
+  await send('start_capture');
+});
 document.getElementById('stopBtn').addEventListener('click', async () => {
   await stopDaemonDirectly();
   await send('stop_capture');

@@ -244,4 +244,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 // Rehydrate state when the service worker wakes up (it is killed when idle).
-restoreActive();
+restoreActive().then((cur) => {
+  // If nothing is capturing, make sure the side panel is not left disabled
+  // globally from a previous capture that ended abruptly.
+  if (!cur) restorePanel();
+});
