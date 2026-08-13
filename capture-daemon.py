@@ -29,6 +29,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +39,10 @@ BACKEND = "127.0.0.1:8877"
 # El idioma de transcripción es siempre español (regla del Capitán, 13/08/2026)
 LANG = "es"
 CHUNK_BYTES = 64 * 1024
+# Si no llega ningún ping/start/stop del navegador durante este tiempo mientras
+# se está grabando, el daemon se autopara (seguridad: navegador cerrado o crasheado)
+HEARTBEAT_TIMEOUT = 120.0
+WATCHDOG_INTERVAL = 15.0
 
 
 def log(msg: str) -> None:
@@ -93,6 +98,25 @@ class CaptureDaemon:
         self._session_id: str | None = None
         self._last_error: str | None = None
         self._last_complete: dict | None = None
+        self._last_activity = time.monotonic()
+        self._watchdog = threading.Thread(
+            target=self._watchdog_loop, daemon=True, name="ghostmeet-watchdog"
+        )
+        self._watchdog.start()
+
+    def _touch(self) -> None:
+        self._last_activity = time.monotonic()
+
+    def _watchdog_loop(self) -> None:
+        """Auto-stop si el navegador deja de hacer ping durante la grabación."""
+        while True:
+            time.sleep(WATCHDOG_INTERVAL)
+            with self._lock:
+                running = self._thread is not None and self._thread.is_alive()
+                idle = time.monotonic() - self._last_activity
+            if running and idle > HEARTBEAT_TIMEOUT:
+                log(f"watchdog: sin actividad {idle:.0f}s, autoparando sesión")
+                self._stop.set()
 
     def status(self) -> dict:
         with self._lock:
@@ -104,7 +128,12 @@ class CaptureDaemon:
                 "complete": self._last_complete,
             }
 
+    def ping(self) -> dict:
+        self._touch()
+        return self.status()
+
     def start(self, session_id: str) -> dict:
+        self._touch()
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return {"ok": False, "error": "already capturing",
@@ -121,6 +150,13 @@ class CaptureDaemon:
             return {"ok": True, "session_id": session_id}
 
     def stop(self, timeout: float = 90.0) -> dict:
+        """Solicita la parada y espera a que el hilo termine.
+
+        El handler HTTP lo llama desde un hilo del ThreadingHTTPServer, así que
+        bloquear aquí no congela el resto de endpoints (status/ping siguen
+        respondiendo).
+        """
+        self._touch()
         with self._lock:
             thread = self._thread
             session_id = self._session_id
@@ -237,6 +273,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(d.stop())
         elif parsed.path == "/status":
             self._json({"ok": True, **d.status()})
+        elif parsed.path == "/ping":
+            self._json({"ok": True, **d.ping()})
         else:
             self._json({"ok": False, "error": "not found"}, 404)
 

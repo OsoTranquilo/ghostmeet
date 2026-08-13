@@ -6,8 +6,28 @@ import { newSessionId } from './shared.js';
 const BACKEND = '127.0.0.1:8877';
 const CAPTURE_DAEMON = '127.0.0.1:8899';
 const OFFSCREEN_URL = 'offscreen.html';
+const ACTIVE_KEY = 'activeCapture'; // { sessionId, daemon, tabId }
 
+// Mirrored in chrome.storage.local so the capture survives service-worker restarts.
 let active = null;
+
+// --- state persistence (MV3 kills idle service workers; never trust memory) ---
+
+async function restoreActive() {
+  const r = await chrome.storage.local.get(ACTIVE_KEY);
+  active = r[ACTIVE_KEY] || null;
+  return active;
+}
+
+async function setActive(value) {
+  active = value;
+  await chrome.storage.local.set({ [ACTIVE_KEY]: value });
+}
+
+async function clearActive() {
+  active = null;
+  await chrome.storage.local.remove(ACTIVE_KEY);
+}
 
 async function offscreenExists() {
   const contexts = await chrome.runtime.getContexts({
@@ -47,19 +67,23 @@ async function daemonStart(sessionId, language) {
   }
 }
 
-// Stops capture through the local daemon. Returns null when the daemon is not
-// reachable (caller falls back to the classic offscreen stop).
+// Stops capture through the local daemon. Retries a couple of times: the daemon
+// can be mid-transcription and slow to answer. Returns null when unreachable.
 async function daemonStop() {
-  try {
-    const resp = await fetch(`http://${CAPTURE_DAEMON}/stop`);
-    if (!resp.ok) return null;
-    return await resp.json();
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const resp = await fetch(`http://${CAPTURE_DAEMON}/stop`, { signal: AbortSignal.timeout(100000) });
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   }
+  return null;
 }
 
 async function startCapture() {
+  await restoreActive();
   if (active) {
     return { ok: false, error: 'already capturing', sessionId: active.sessionId };
   }
@@ -74,7 +98,8 @@ async function startCapture() {
     if (!daemon.ok) {
       return { ok: false, error: daemon.error || 'capture daemon refused to start', sessionId };
     }
-    active = { sessionId, daemon: true };
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await setActive({ sessionId, daemon: true, tabId: tab?.id ?? null });
     await chrome.storage.local.set({ activeSessionId: sessionId });
     return { ok: true, sessionId, message: 'capture started (daemon: mic + system audio)' };
   }
@@ -106,16 +131,18 @@ async function startCapture() {
     return { ok: false, error: started?.error || 'recorder failed to start' };
   }
 
-  active = { sessionId, tabId: tab.id, daemon: false };
+  await setActive({ sessionId, tabId: tab.id, daemon: false });
   await chrome.storage.local.set({ activeSessionId: sessionId });
   return { ok: true, sessionId, message: 'capture started' };
 }
 
 async function stopCapture() {
+  await restoreActive();
   if (!active) return { ok: false, error: 'not capturing' };
 
   const { sessionId, daemon } = active;
-  active = null;
+  await clearActive();
+  await chrome.storage.local.remove('activeSessionId');
 
   if (daemon) {
     const result = await daemonStop();
@@ -125,14 +152,24 @@ async function stopCapture() {
       chrome.runtime.sendMessage({ target: 'panel', action: 'backend_message', data: result.complete })
         .catch(() => {});
     }
-    await chrome.storage.local.remove('activeSessionId');
+    // Always reset the panel UI, even if the completion relay failed.
+    chrome.runtime.sendMessage({ target: 'panel', action: 'transcript_stop' }).catch(() => {});
     return { ok: true, sessionId, message: 'capture stopped (daemon)' };
   }
 
   await chrome.runtime.sendMessage({ target: 'offscreen', action: 'stop' }).catch(() => {});
-  await chrome.storage.local.remove('activeSessionId');
+  chrome.runtime.sendMessage({ target: 'panel', action: 'transcript_stop' }).catch(() => {});
   return { ok: true, sessionId, message: 'capture stopped' };
 }
+
+// Safety net: closing the tab that started the capture stops the daemon too
+// (e.g. the user ends the meeting and closes the Meet tab).
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const cur = await restoreActive();
+  if (cur && cur.tabId === tabId) {
+    await stopCapture();
+  }
+});
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // offscreen and side panel traffic is addressed elsewhere
@@ -154,3 +191,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true;
 });
+
+// Rehydrate state when the service worker wakes up (it is killed when idle).
+restoreActive();

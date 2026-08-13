@@ -32,5 +32,21 @@ async function send(action) {
   }
 }
 
+// Redundant safety net: stop the capture daemon directly from the popup, in
+// addition to the background service worker doing it. If the service worker was
+// asleep (MV3 kills idle workers), this still reaches the daemon.
+async function stopDaemonDirectly() {
+  try {
+    const resp = await fetch('http://127.0.0.1:8899/stop');
+    if (resp.ok) return await resp.json();
+  } catch {
+    // daemon not running — nothing to stop
+  }
+  return null;
+}
+
 document.getElementById('startBtn').addEventListener('click', () => send('start_capture'));
-document.getElementById('stopBtn').addEventListener('click', () => send('stop_capture'));
+document.getElementById('stopBtn').addEventListener('click', async () => {
+  await stopDaemonDirectly();
+  await send('stop_capture');
+});

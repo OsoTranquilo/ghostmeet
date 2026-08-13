@@ -115,6 +115,24 @@ async function connectTranscript(sessionId) {
   shownSessionId = sessionId;
   setStatus('connecting', 'connecting...');
   clearTranscript();
+
+  // Don't show a ghost "live" timer for sessions that already finished (e.g.
+  // after the browser was closed mid-capture): check the real status first.
+  try {
+    const resp = await fetch(`http://${BACKEND_URL}/api/sessions/${sessionId}`);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.status && data.status !== 'streaming' && data.status !== 'transcribing') {
+        await loadHistory(sessionId);
+        setStatus('disconnected', 'finished');
+        note(`✅ Transcription complete — ${data.transcript_segments ?? 0} segments, ${formatClock(data.duration_sec ?? 0)}`);
+        return;
+      }
+    }
+  } catch {
+    // backend not up yet; live updates will still work once it is
+  }
+
   await loadHistory(sessionId);
 
   ws = new WebSocket(`ws://${BACKEND_URL}/ws/transcript/${sessionId}`);
