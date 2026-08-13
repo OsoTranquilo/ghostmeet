@@ -243,13 +243,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // offscreen and side panel traffic is addressed elsewhere
   if (message?.target && message.target !== 'background') return;
 
   (async () => {
     if (message.action === 'start_capture') {
-      sendResponse(await startCapture(message.tabId));
+      // The side panel can now start captures itself; when it does, the message
+      // sender knows the tab even if the popup is not involved.
+      const tabId = message.tabId ?? sender.tab?.id;
+      sendResponse(await startCapture(tabId));
     } else if (message.action === 'stop_capture') {
       sendResponse(await stopCapture());
     } else if (message.action === 'capture_finished') {

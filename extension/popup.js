@@ -72,3 +72,12 @@ document.getElementById('stopBtn').addEventListener('click', () => {
   // 2. Clean up state in the background (clears storage, notifies the panel).
   notifyBackground('stop_capture');
 });
+
+document.getElementById('openPanelBtn').addEventListener('click', async () => {
+  const tabId = await activeTabId();
+  if (chrome.sidePanel && tabId != null) {
+    await openPanelWithRetry(tabId);
+  } else {
+    show('⚠ no active tab');
+  }
+});

@@ -18,6 +18,15 @@ const durationEl = document.getElementById('duration');
 const languageEl = document.getElementById('language');
 const btnClear = document.getElementById('btn-clear');
 const btnSummarize = document.getElementById('btn-summarize');
+const btnStart = document.getElementById('btn-start');
+const btnStop = document.getElementById('btn-stop');
+
+// --- capture buttons state ---
+
+function setCapturing(capturing) {
+  btnStart.disabled = capturing;
+  btnStop.disabled = !capturing;
+}
 
 // --- helpers ---
 
@@ -179,16 +188,44 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.action === 'transcript_start' && message.sessionId) {
     connectTranscript(message.sessionId);
+    setCapturing(true);
   } else if (message.action === 'transcript_stop') {
     disconnect();
+    setCapturing(false);
   } else if (message.action === 'backend_message' && message.data?.type === 'complete') {
     const { segment_count: count, duration_sec: duration } = message.data;
     setStatus('disconnected', 'finished');
     note(`✅ Transcription complete — ${count} segments, ${formatClock(duration)}`);
     stopDurationTimer();
+    setCapturing(false);
   }
   sendResponse({ ok: true });
   return true;
+});
+
+// --- capture from the panel itself (self-contained) ---
+// The side panel now has its own Start/Stop, so a capture can be driven entirely
+// from here — no popup needed. The background resolves the tab from the message
+// sender, which fixes the "panel open + Start does nothing" case.
+
+btnStart.addEventListener('click', async () => {
+  btnStart.disabled = true;
+  const response = await chrome.runtime.sendMessage({ action: 'start_capture' }).catch(() => null);
+  if (!response || !response.ok) {
+    note(`⚠ ${response?.error || 'capture failed to start'}`);
+    btnStart.disabled = false;
+    return;
+  }
+  setCapturing(true);
+  connectTranscript(response.sessionId);
+});
+
+btnStop.addEventListener('click', async () => {
+  btnStop.disabled = true;
+  // Stop the daemon directly (reaches 127.0.0.1 even if the panel dies) and
+  // let the background clean up state + notify us with the completion.
+  fetch('http://127.0.0.1:8899/stop').catch(() => {});
+  await chrome.runtime.sendMessage({ action: 'stop_capture' }).catch(() => null);
 });
 
 // --- language ---
@@ -261,8 +298,12 @@ async function waitForActiveSession(timeoutMs = 6000) {
 chrome.storage.local.get('activeSessionId').then(async ({ activeSessionId }) => {
   if (activeSessionId) {
     connectTranscript(activeSessionId);
+    setCapturing(true);
   } else {
     const sid = await waitForActiveSession();
-    if (sid) connectTranscript(sid);
+    if (sid) {
+      connectTranscript(sid);
+      setCapturing(true);
+    }
   }
 });

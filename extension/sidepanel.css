@@ -59,6 +59,54 @@ body {
   padding: 8px 16px;
   background: #16213e;
   border-bottom: 1px solid #2a2a4a;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.capture-buttons {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.capture-buttons button {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#btn-start {
+  background: #16a34a;
+  color: #fff;
+}
+
+#btn-start:hover {
+  background: #22c55e;
+}
+
+#btn-start:disabled {
+  background: #2a2a4a;
+  color: #666;
+  cursor: not-allowed;
+}
+
+#btn-stop {
+  background: #dc2626;
+  color: #fff;
+}
+
+#btn-stop:hover {
+  background: #ef4444;
+}
+
+#btn-stop:disabled {
+  background: #2a2a4a;
+  color: #666;
+  cursor: not-allowed;
 }
 
 #controls select {
