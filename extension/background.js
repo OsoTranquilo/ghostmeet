@@ -87,12 +87,22 @@ async function daemonStop() {
 // The side panel normally shows on every tab of the window. While capturing,
 // restrict it to the tab that started the capture, so it never leaks into a
 // screen share of another tab.
+//
+// IMPORTANT: do NOT call setOptions({ enabled: false }) globally here — that
+// closes an already-open panel (the popup opens it with the fresh click gesture
+// before this runs). Instead, disable the OTHER tabs one by one and keep the
+// capture tab enabled.
 
 async function restrictPanelToTab(tabId) {
   if (tabId == null) return;
   try {
-    await chrome.sidePanel.setOptions({ enabled: false }); // all tabs
-    await chrome.sidePanel.setOptions({ tabId, enabled: true }); // capture tab only
+    const tabs = await chrome.tabs.query({});
+    for (const t of tabs) {
+      if (t.id !== tabId) {
+        await chrome.sidePanel.setOptions({ tabId: t.id, enabled: false }).catch(() => {});
+      }
+    }
+    await chrome.sidePanel.setOptions({ tabId, enabled: true }).catch(() => {});
   } catch (e) {
     console.error('restrictPanelToTab failed', e);
   }
@@ -134,14 +144,8 @@ async function startCapture(tabId) {
     }
     await setActive({ sessionId, daemon: true, tabId: tab?.id ?? null });
     await chrome.storage.local.set({ activeSessionId: sessionId });
+    // The popup already opened the panel with the click gesture; just scope it.
     await restrictPanelToTab(tab?.id);
-    // Open the panel from the background AFTER the tab is enabled: the popup
-    // opens the panel too early (panel disabled globally at that point) and
-    // dies on focus loss. The message from the popup carries the user gesture,
-    // so sidePanel.open() works here.
-    if (tab?.id != null && chrome.sidePanel) {
-      chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
-    }
     chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
     return { ok: true, sessionId, message: 'capture started (daemon: mic + system audio)' };
   }
@@ -175,9 +179,6 @@ async function startCapture(tabId) {
   await setActive({ sessionId, tabId: tab.id, daemon: false });
   await chrome.storage.local.set({ activeSessionId: sessionId });
   await restrictPanelToTab(tab.id);
-  if (chrome.sidePanel) {
-    chrome.sidePanel.open({ tabId: tab.id }).catch(() => {});
-  }
   return { ok: true, sessionId, message: 'capture started' };
 }
 
