@@ -5,7 +5,18 @@ function show(text) {
 }
 
 async function send(action) {
-  const response = await chrome.runtime.sendMessage({ action });
+  // The popup knows its own window; pass the active tab id so the background
+  // restricts the side panel to the right tab (the service worker's
+  // "currentWindow" can resolve to a different window otherwise).
+  let tabId;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = tab?.id;
+  } catch {
+    tabId = undefined;
+  }
+
+  const response = await chrome.runtime.sendMessage({ action, tabId });
   if (!response) {
     show('no response from the extension background');
     return;

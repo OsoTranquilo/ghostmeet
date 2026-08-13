@@ -89,11 +89,12 @@ async function daemonStop() {
 // screen share of another tab.
 
 async function restrictPanelToTab(tabId) {
+  if (tabId == null) return;
   try {
     await chrome.sidePanel.setOptions({ enabled: false }); // all tabs
     await chrome.sidePanel.setOptions({ tabId, enabled: true }); // capture tab only
-  } catch {
-    // sidePanel API unavailable — ignore
+  } catch (e) {
+    console.error('restrictPanelToTab failed', e);
   }
 }
 
@@ -105,7 +106,7 @@ async function restorePanel() {
   }
 }
 
-async function startCapture() {
+async function startCapture(tabId) {
   await restoreActive();
   if (active) {
     return { ok: false, error: 'already capturing', sessionId: active.sessionId };
@@ -114,6 +115,16 @@ async function startCapture() {
   const { language = '' } = await chrome.storage.local.get('language');
   const sessionId = newSessionId();
 
+  // The popup knows its own window, so it passes the tab id explicitly — the
+  // service worker's "currentWindow" can resolve to the wrong window otherwise.
+  let tab = null;
+  if (tabId != null) {
+    tab = await chrome.tabs.get(tabId).catch(() => null);
+  }
+  if (!tab) {
+    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  }
+
   // Prefer the local capture daemon: it records mic + system audio (both sides
   // of the call), which the tab-capture fallback below cannot do.
   const daemon = await daemonStart(sessionId, language);
@@ -121,7 +132,6 @@ async function startCapture() {
     if (!daemon.ok) {
       return { ok: false, error: daemon.error || 'capture daemon refused to start', sessionId };
     }
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await setActive({ sessionId, daemon: true, tabId: tab?.id ?? null });
     await chrome.storage.local.set({ activeSessionId: sessionId });
     await restrictPanelToTab(tab?.id);
@@ -129,7 +139,6 @@ async function startCapture() {
     return { ok: true, sessionId, message: 'capture started (daemon: mic + system audio)' };
   }
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || tab.id === undefined) {
     return { ok: false, error: 'no active tab to capture' };
   }
@@ -219,7 +228,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   (async () => {
     if (message.action === 'start_capture') {
-      sendResponse(await startCapture());
+      sendResponse(await startCapture(message.tabId));
     } else if (message.action === 'stop_capture') {
       sendResponse(await stopCapture());
     } else if (message.action === 'capture_finished') {
