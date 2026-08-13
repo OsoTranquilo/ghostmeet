@@ -23,21 +23,44 @@ async function activeTabId() {
   }
 }
 
+// Open the side panel with retries: a previous capture may have left this tab
+// disabled per-tab (Chrome persists those overrides), and the background's
+// restorePanel() runs in parallel — so try a few times before giving up, and
+// fall back to opening on the whole window.
+async function openPanelWithRetry(tabId, attempts = 3) {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      await chrome.sidePanel.setOptions({ tabId, enabled: true }).catch(() => {});
+      await chrome.sidePanel.open({ tabId });
+      return true;
+    } catch (e) {
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 600)); // let the background restore
+      } else {
+        // Last resort: open on the window's active tab.
+        try {
+          const win = await chrome.windows.getCurrent();
+          await chrome.sidePanel.open({ windowId: win.id });
+          return true;
+        } catch (e2) {
+          show(`⚠ panel: ${e2.message}`);
+        }
+      }
+    }
+  }
+  return false;
+}
+
 document.getElementById('startBtn').addEventListener('click', async () => {
   const tabId = await activeTabId();
   // 1. Start the capture FIRST (fire-and-forget): the service worker wakes up,
-  //    calls the daemon /start and stores the active session id.
+  //    calls the daemon /start, clears stuck panel overrides and stores the
+  //    active session id.
   notifyBackground('start_capture', tabId);
-  // 2. Open the panel with the fresh click gesture. Force-enable the tab first:
-  //    per-tab disabled overrides from a previous capture can persist, and
-  //    open() would fail with "No active side panel for tabId".
+  // 2. Open the panel with the fresh click gesture, retrying until the
+  //    background has re-enabled the tab.
   if (chrome.sidePanel && tabId != null) {
-    try {
-      await chrome.sidePanel.setOptions({ tabId, enabled: true });
-    } catch {
-      // ignore — open() below will surface real problems
-    }
-    chrome.sidePanel.open({ tabId }).catch((e) => show(`⚠ panel: ${e.message}`));
+    await openPanelWithRetry(tabId);
   }
 });
 

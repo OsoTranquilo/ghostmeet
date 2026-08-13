@@ -151,7 +151,9 @@ async function startCapture(tabId) {
     }
     await setActive({ sessionId, daemon: true, tabId: tab?.id ?? null });
     await chrome.storage.local.set({ activeSessionId: sessionId });
-    // The popup already opened the panel with the click gesture; just scope it.
+    // Clear any stuck per-tab disabled overrides from previous captures first,
+    // then scope the panel to the capture tab only.
+    await restorePanel();
     await restrictPanelToTab(tab?.id);
     chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
     return { ok: true, sessionId, message: 'capture started (daemon: mic + system audio)' };
@@ -185,6 +187,7 @@ async function startCapture(tabId) {
 
   await setActive({ sessionId, tabId: tab.id, daemon: false });
   await chrome.storage.local.set({ activeSessionId: sessionId });
+  await restorePanel();
   await restrictPanelToTab(tab.id);
   return { ok: true, sessionId, message: 'capture started' };
 }
