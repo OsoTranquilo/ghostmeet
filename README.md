@@ -114,6 +114,33 @@ Reopening the side panel mid-meeting brings the transcript so far back with it.
 
 That's it. No sign-up, no config, no cloud.
 
+## Capturing both sides of the call (mic + system audio)
+
+The Chrome extension captures the tab audio, which is everyone **except you**. To also
+transcribe your own voice, run the **capture daemon**: it mixes your microphone with the
+system audio (PipeWire/pulseaudio) and streams the result to the same backend. The
+extension's **Start/Stop** buttons then control both capture paths — no terminal needed.
+
+### 1) Start the daemon
+
+```bash
+cp deploy/capture-daemon.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now capture-daemon
+# check it is listening:
+curl http://127.0.0.1:8899/status
+```
+
+The daemon must run in your graphical session (where PipeWire lives). If the service is
+not running, the extension falls back to tab-only capture automatically.
+
+### 2) Reload the extension
+
+Open `chrome://extensions` and click the ↻ reload button on ghostmeet. The side panel
+Start/Stop buttons now also drive the daemon, so the transcript includes your voice.
+
+Language is always Spanish (`lang=es`) for the daemon capture.
+
 ## Configuration
 
 Set these in `.env` or `docker-compose.yml`:

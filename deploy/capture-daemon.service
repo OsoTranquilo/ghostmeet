@@ -1,0 +1,15 @@
+[Unit]
+Description=ghostmeet capture daemon — mic + system audio bridge for the Chrome extension
+# The daemon must run inside the user's graphical session to reach PipeWire/pulseaudio.
+After=graphical-session.target pipewire.service pipewire-pulse.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Adjust the path if the repo is cloned somewhere else (%h = home directory).
+ExecStart=/usr/bin/python3 %h/ghostmeet/capture-daemon.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
