@@ -6,7 +6,8 @@ import { newSessionId } from './shared.js';
 const BACKEND = '127.0.0.1:8877';
 const CAPTURE_DAEMON = '127.0.0.1:8899';
 const OFFSCREEN_URL = 'offscreen.html';
-const ACTIVE_KEY = 'activeCapture'; // { sessionId, daemon, tabId }
+const ACTIVE_KEY = 'activeCapture';
+const HEARTBEAT_ALARM = 'ghostmeet-heartbeat'; // { sessionId, daemon, tabId }
 
 // Mirrored in chrome.storage.local so the capture survives service-worker restarts.
 let active = null;
@@ -82,6 +83,28 @@ async function daemonStop() {
   return null;
 }
 
+// --- side panel scoping ---
+// The side panel normally shows on every tab of the window. While capturing,
+// restrict it to the tab that started the capture, so it never leaks into a
+// screen share of another tab.
+
+async function restrictPanelToTab(tabId) {
+  try {
+    await chrome.sidePanel.setOptions({ enabled: false }); // all tabs
+    await chrome.sidePanel.setOptions({ tabId, enabled: true }); // capture tab only
+  } catch {
+    // sidePanel API unavailable — ignore
+  }
+}
+
+async function restorePanel() {
+  try {
+    await chrome.sidePanel.setOptions({ enabled: true });
+  } catch {
+    // ignore
+  }
+}
+
 async function startCapture() {
   await restoreActive();
   if (active) {
@@ -101,6 +124,8 @@ async function startCapture() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await setActive({ sessionId, daemon: true, tabId: tab?.id ?? null });
     await chrome.storage.local.set({ activeSessionId: sessionId });
+    await restrictPanelToTab(tab?.id);
+    chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: 0.5 });
     return { ok: true, sessionId, message: 'capture started (daemon: mic + system audio)' };
   }
 
@@ -133,6 +158,7 @@ async function startCapture() {
 
   await setActive({ sessionId, tabId: tab.id, daemon: false });
   await chrome.storage.local.set({ activeSessionId: sessionId });
+  await restrictPanelToTab(tab.id);
   return { ok: true, sessionId, message: 'capture started' };
 }
 
@@ -143,6 +169,8 @@ async function stopCapture() {
   const { sessionId, daemon } = active;
   await clearActive();
   await chrome.storage.local.remove('activeSessionId');
+  await restorePanel();
+  chrome.alarms.clear(HEARTBEAT_ALARM).catch(() => {});
 
   if (daemon) {
     const result = await daemonStop();
@@ -168,6 +196,20 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   const cur = await restoreActive();
   if (cur && cur.tabId === tabId) {
     await stopCapture();
+  }
+});
+
+// Heartbeat while capturing: chrome.alarms wakes the service worker even when
+// it is idle and even if the side panel is closed, so a long meeting keeps the
+// daemon alive but a dead browser lets the daemon auto-stop.
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== HEARTBEAT_ALARM) return;
+  const cur = await restoreActive();
+  if (!cur || !cur.daemon) return;
+  try {
+    await fetch(`http://${CAPTURE_DAEMON}/ping`);
+  } catch {
+    // daemon unreachable — nothing else to do
   }
 });
 
