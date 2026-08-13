@@ -244,7 +244,25 @@ btnSummarize.addEventListener('click', async () => {
 btnClear.addEventListener('click', clearTranscript);
 
 // --- on load: reattach to whatever is running ---
+// The popup opens the panel instantly (fresh user gesture) but the transcript
+// start message can arrive before this script finishes loading. Poll storage
+// for a few seconds so we never miss an active session.
 
-chrome.storage.local.get('activeSessionId').then(({ activeSessionId }) => {
-  if (activeSessionId) connectTranscript(activeSessionId);
+async function waitForActiveSession(timeoutMs = 6000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const { activeSessionId } = await chrome.storage.local.get('activeSessionId');
+    if (activeSessionId) return activeSessionId;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return null;
+}
+
+chrome.storage.local.get('activeSessionId').then(async ({ activeSessionId }) => {
+  if (activeSessionId) {
+    connectTranscript(activeSessionId);
+  } else {
+    const sid = await waitForActiveSession();
+    if (sid) connectTranscript(sid);
+  }
 });

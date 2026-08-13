@@ -29,21 +29,14 @@ async function send(action) {
 
   if (action === 'start_capture') {
     show(`● recording — ${response.sessionId}`);
+    // The side panel auto-attaches to the active session from storage, so this
+    // message is just a hint — it must not be the only way the panel connects
+    // (the popup can close the moment the panel opens).
     chrome.runtime.sendMessage({
       target: 'panel',
       action: 'transcript_start',
       sessionId: response.sessionId,
     }).catch(() => {});
-    // Open the panel on the capture tab explicitly (windowId can fail when the
-    // panel is restricted per-tab). Surface errors instead of swallowing them.
-    if (chrome.sidePanel) {
-      if (tabId != null) {
-        chrome.sidePanel.open({ tabId }).catch((e) => show(`⚠ panel: ${e.message}`));
-      } else {
-        const window = await chrome.windows.getCurrent();
-        chrome.sidePanel.open({ windowId: window.id }).catch((e) => show(`⚠ panel: ${e.message}`));
-      }
-    }
   } else if (action === 'stop_capture') {
     show('■ stopped — finishing transcription...');
   }
