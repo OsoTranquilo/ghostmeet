@@ -6,6 +6,7 @@ let ws = null;
 let segmentCount = 0;
 let startTime = null;
 let durationTimer = null;
+let heartbeatTimer = null;
 // the session the panel is showing — outlives the capture so Summarize still works
 // after Stop, when activeSessionId has already been cleared
 let shownSessionId = null;
@@ -93,6 +94,26 @@ function stopDurationTimer() {
   }
 }
 
+// --- daemon heartbeat ---
+// While the panel is showing a live session it pings the capture daemon every
+// 30s. The daemon auto-stops if it hears nothing for HEARTBEAT_TIMEOUT, so a
+// dead browser never leaves the mic recording, but a long meeting with the
+// panel open keeps the capture alive.
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    fetch('http://127.0.0.1:8899/ping').catch(() => {});
+  }, 30000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
 // --- transcript history ---
 
 async function loadHistory(sessionId) {
@@ -124,6 +145,7 @@ async function connectTranscript(sessionId) {
       const data = await resp.json();
       if (data.status && data.status !== 'streaming' && data.status !== 'transcribing') {
         await loadHistory(sessionId);
+        stopHeartbeat();
         setStatus('disconnected', 'finished');
         note(`✅ Transcription complete — ${data.transcript_segments ?? 0} segments, ${formatClock(data.duration_sec ?? 0)}`);
         return;
@@ -140,6 +162,7 @@ async function connectTranscript(sessionId) {
   ws.onopen = () => {
     setStatus('connected', `live — ${sessionId}`);
     startDurationTimer();
+    startHeartbeat();
   };
 
   ws.onmessage = (event) => {
@@ -156,11 +179,13 @@ async function connectTranscript(sessionId) {
   ws.onclose = () => {
     setStatus('disconnected', 'disconnected');
     stopDurationTimer();
+    stopHeartbeat();
   };
 
   ws.onerror = () => {
     setStatus('disconnected', 'connection error');
     stopDurationTimer();
+    stopHeartbeat();
   };
 }
 
@@ -170,6 +195,7 @@ function disconnect() {
     ws = null;
   }
   stopDurationTimer();
+  stopHeartbeat();
 }
 
 // --- messages from the popup, background and offscreen document ---
@@ -186,6 +212,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     setStatus('disconnected', 'finished');
     note(`✅ Transcription complete — ${count} segments, ${formatClock(duration)}`);
     stopDurationTimer();
+    stopHeartbeat();
   }
   sendResponse({ ok: true });
   return true;
