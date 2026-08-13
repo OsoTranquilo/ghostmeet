@@ -110,7 +110,14 @@ async function restrictPanelToTab(tabId) {
 
 async function restorePanel() {
   try {
+    // Per-tab disabled overrides stick even after a global enable, so re-enable
+    // every tab individually too (otherwise a second Start from a previously
+    // disabled tab fails with "No active side panel for tabId").
     await chrome.sidePanel.setOptions({ enabled: true });
+    const tabs = await chrome.tabs.query({});
+    for (const t of tabs) {
+      await chrome.sidePanel.setOptions({ tabId: t.id, enabled: true }).catch(() => {});
+    }
   } catch {
     // ignore
   }
